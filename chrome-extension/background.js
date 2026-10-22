@@ -91,19 +91,24 @@ function inspectProductPage() {
     return { error: 'Amazon requested a CAPTCHA. Open Amazon India and complete it, then try again.' };
   }
   const detailsText = [
-    '#detailBullets_feature_div', '#productDetails_techSpec_section_1',
-    '#productDetails_detailBullets_sections1', '#productDetails_db_sections', '#productDetails_bookDetails_section'
+    '#detailBullets_feature_div', '#detailBulletsWrapper_feature_div', '#productDetails_techSpec_section_1',
+    '#productDetails_detailBullets_sections1', '#productDetails_db_sections', '#productDetails_bookDetails_section',
+    '#bookDetails_feature_div', '#productDetailsTable'
   ].map((selector) => document.querySelector(selector)?.innerText || '').filter(Boolean).join(' ');
   const title = document.querySelector('#productTitle')?.innerText?.trim() || '';
   const authors = document.querySelector('#bylineInfo')?.innerText?.trim() || '';
-  const match = detailsText.match(/ISBN\s*-?\s*13\s*[:\s]+((?:978|979)(?:[-\s]?\d){10})/i);
-  if (!match) return { title, authors, error: 'The selected product page does not list an ISBN-13 in Product Details.' };
-  const isbn = match[1].replace(/\D/g, '');
-  if (!/^(978|979)\d{10}$/.test(isbn)) return { title, authors, error: 'Amazon returned an invalid ISBN-13.' };
-  const sum = [...isbn.slice(0, 12)].reduce((total, digit, index) => total + Number(digit) * (index % 2 ? 3 : 1), 0);
-  return (10 - (sum % 10)) % 10 === Number(isbn[12])
-    ? { isbn, title, authors }
-    : { title, authors, error: 'Amazon returned an ISBN with an invalid check digit.' };
+  const structuredMetadata = [...document.querySelectorAll('script[type="application/ld+json"]')]
+    .map((script) => script.textContent || '').join(' ');
+  const allDetails = `${detailsText} ${structuredMetadata} ${document.body.innerText}`
+    .replace(/[\u200b-\u200f\u2060\ufeff]/g, ' ');
+  const isbnMatches = [...allDetails.matchAll(/ISBN\s*(?:-|–|—)?\s*13\s*[^0-9]{0,24}((?:978|979)(?:[\s-]*\d){10})/gi)];
+  for (const match of isbnMatches) {
+    const isbn = match[1].replace(/\D/g, '');
+    if (!/^(978|979)\d{10}$/.test(isbn)) continue;
+    const sum = [...isbn.slice(0, 12)].reduce((total, digit, index) => total + Number(digit) * (index % 2 ? 3 : 1), 0);
+    if ((10 - (sum % 10)) % 10 === Number(isbn[12])) return { isbn, title, authors };
+  }
+  return { title, authors, error: 'The selected product page does not list a valid ISBN-13.' };
 }
 
 async function runInTab(tabId, func) {

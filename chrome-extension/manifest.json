@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Amazon India ISBN Finder",
-  "version": "1.1.1",
+  "version": "1.1.2",
   "description": "Find ISBN-13 values from Amazon India book pages opened in your browser.",
   "action": {
     "default_title": "Amazon India ISBN Finder",
