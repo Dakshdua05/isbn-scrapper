@@ -48,10 +48,12 @@ function scoreProduct(query, candidate) {
   const authorCoverage = tokenCoverage(authorTokens, facts);
   let score = titleCoverage * 80 + authorCoverage * 55;
   if (title === normalize(wanted.title)) score += 45;
+  if (!wanted.author && title.startsWith(normalize(wanted.title))) score += 20;
   if (wanted.author && facts.includes(normalize(wanted.author))) score += 35;
   if (/paperback|hardcover/i.test(candidate.details || '')) score += 4;
   if (/summary|workbook|journal|planner|study guide|key takeaways|audiobook|kindle|box set/i.test(candidate.title) &&
       !/summary|workbook|journal|planner|study guide|key takeaways|audiobook|kindle|box set/i.test(query)) score -= 80;
+  if (!wanted.author && /box set|collection|combo|pack of|set of|bundle|complete series/i.test(candidate.title)) score -= 100;
   return { ...candidate, score, titleCoverage, authorCoverage };
 }
 
@@ -60,7 +62,10 @@ function rankProducts(query, candidates) {
 }
 
 function isVerifiedMatch(product) {
-  return product.titleCoverage >= 0.7 && (product.authorCoverage >= 0.5 || !parseBookQuery(product.query).author);
+  const requestedAuthor = parseBookQuery(product.query).author;
+  return requestedAuthor
+    ? product.titleCoverage >= 0.7 && product.authorCoverage >= 0.5
+    : product.titleCoverage >= 0.9;
 }
 
 function inspectSearchPage() {
