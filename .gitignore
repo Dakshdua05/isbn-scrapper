@@ -2,3 +2,4 @@
 .env
 .env.*
 !.env.example
+ISBN-Scrapper-Chrome-Extension.zip
