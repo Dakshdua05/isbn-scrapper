@@ -1,0 +1,30 @@
+{
+  "version": 2,
+  "routes": [
+    {
+      "src": "/api/scrape",
+      "dest": "api/scraper.py"
+    },
+    {
+      "src": "/api/extract-books",
+      "dest": "api/image_books.py"
+    },
+    {
+      "src": "/api/suggest",
+      "dest": "api/suggest.py"
+    }
+  ],
+  "functions": {
+    "api/scraper.py": {
+      "maxDuration": 60
+    }
+  },
+  "headers": [
+    {
+      "source": "/(.*)",
+      "headers": [
+        { "key": "Cache-Control", "value": "no-cache, no-store, must-revalidate" }
+      ]
+    }
+  ]
+}

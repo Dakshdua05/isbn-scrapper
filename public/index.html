@@ -1,0 +1,352 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>ISBN Scraper</title>
+    <style>
+      :root { color-scheme: light; font-family: Inter, system-ui, sans-serif; }
+      * { box-sizing: border-box; }
+      body { margin: 0; min-height: 100vh; background: #f6f7fb; color: #172033; }
+      main { width: min(760px, calc(100% - 32px)); margin: 0 auto; padding: 72px 0; }
+      h1 { font-size: clamp(2rem, 6vw, 3.5rem); margin: 0 0 12px; letter-spacing: -0.06em; }
+      p { color: #5a6477; line-height: 1.55; }
+      .card { background: white; border: 1px solid #e2e6ee; border-radius: 18px; padding: 24px; margin-top: 32px; box-shadow: 0 12px 35px rgba(23, 32, 51, .06); }
+      label { display: block; font-weight: 700; margin-bottom: 10px; }
+      textarea { width: 100%; min-height: 180px; padding: 14px; border: 1px solid #cbd2df; border-radius: 10px; resize: vertical; color: inherit; font: inherit; line-height: 1.5; }
+      .book-entry { position: relative; }
+      .suggestions { position: absolute; z-index: 5; top: calc(100% - 4px); left: 0; right: 0; display: none; max-height: 260px; overflow-y: auto; background: #fff; border: 1px solid #cbd2df; border-radius: 10px; box-shadow: 0 12px 30px rgba(23, 32, 51, .16); }
+      .suggestions.visible { display: block; }
+      .suggestion { display: block; width: 100%; margin: 0; padding: 11px 14px; border: 0; border-bottom: 1px solid #edf0f5; border-radius: 0; background: transparent; color: #172033; font: inherit; text-align: left; }
+      .suggestion:last-child { border-bottom: 0; }
+      .suggestion:hover, .suggestion.active { background: #eff3ff; color: #173f9b; }
+      .suggestion-title { display: block; font-weight: 700; }
+      .suggestion-author { display: block; margin-top: 2px; color: #5a6477; font-size: .9rem; }
+      button { margin-top: 16px; background: #2556d8; border: 0; border-radius: 10px; padding: 12px 18px; color: white; font: 700 1rem inherit; cursor: pointer; }
+      button:hover { background: #1e47b5; }
+      button:disabled { opacity: .6; cursor: wait; }
+      .upload { display: inline-block; margin: 16px 0 0 10px; border: 1px solid #b9c5e5; border-radius: 10px; padding: 11px 16px; color: #214eaa; font-weight: 700; cursor: pointer; }
+      .upload:hover { background: #eff3ff; }
+      input[type="file"] { display: none; }
+      #status { min-height: 24px; margin-top: 18px; color: #5a6477; }
+      table { width: 100%; margin-top: 16px; border-collapse: collapse; text-align: left; }
+      th, td { padding: 12px 8px; border-bottom: 1px solid #e7eaf0; vertical-align: top; }
+      th { font-size: .8rem; text-transform: uppercase; letter-spacing: .05em; color: #697386; }
+      .found { color: #187043; font-weight: 700; }
+      .missing { color: #a24a0b; }
+      .note { font-size: .9rem; margin-top: 22px; }
+      .message { margin-top: 16px; padding: 14px; border-radius: 10px; background: #f4f6fa; white-space: pre-wrap; word-break: break-word; }
+      h2 { margin: 0 0 8px; font-size: 1.35rem; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>ISBN Scraper</h1>
+      <p>Paste book titles, one per line, or upload a picture of a book list. Repeated books and quantities are counted once. The tool looks for ISBN-13 details on Amazon India.</p>
+
+      <section class="card">
+        <form id="lookup-form">
+          <label for="books">Book titles</label>
+          <div class="book-entry">
+            <textarea id="books" required aria-autocomplete="list" aria-controls="book-suggestions" aria-expanded="false" placeholder="Atomic Habits by James Clear&#10;Let Us C by Yashavant Kanetkar"></textarea>
+            <div id="book-suggestions" class="suggestions" role="listbox" aria-label="Book suggestions"></div>
+          </div>
+          <p class="note">Start typing a title to see book suggestions. Select one to add its title and author.</p>
+          <button id="submit" type="submit">Find ISBNs</button>
+          <label class="upload" for="image-upload">Add a picture</label>
+          <input id="image-upload" type="file" accept="image/*" />
+        </form>
+        <p id="status" role="status"></p>
+        <div id="results" aria-live="polite"></div>
+        <p class="note">Install the Amazon India ISBN Finder extension to search Amazon in your own browser. Results appear here after the lookup.</p>
+      </section>
+
+      <section class="card">
+        <h2>Book list from an image</h2>
+        <p>Upload a photo of book covers or spines. This task returns only unique book titles and authors; it does not search Amazon or look up ISBNs.</p>
+        <label class="upload" for="list-image-upload">Create book list from image</label>
+        <input id="list-image-upload" type="file" accept="image/*" />
+        <p id="list-status" role="status"></p>
+        <div id="list-results" aria-live="polite"></div>
+      </section>
+    </main>
+
+    <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+    <script>
+      const form = document.querySelector('#lookup-form');
+      const booksInput = document.querySelector('#books');
+      const suggestions = document.querySelector('#book-suggestions');
+      const submitButton = document.querySelector('#submit');
+      const imageUpload = document.querySelector('#image-upload');
+      const listImageUpload = document.querySelector('#list-image-upload');
+      const listStatus = document.querySelector('#list-status');
+      const listResults = document.querySelector('#list-results');
+      const status = document.querySelector('#status');
+      const results = document.querySelector('#results');
+      let extensionAvailable = false;
+      let suggestionTimer;
+      let suggestionItems = [];
+      let activeSuggestion = -1;
+      let lookupSequence = 0;
+
+      function escapeHtml(value) {
+        const element = document.createElement('span');
+        element.textContent = value;
+        return element.innerHTML;
+      }
+
+      function prepareBooks(lines) {
+        const seen = new Set();
+        return lines
+          .map((line) => line
+            .replace(/\s*(?:qty|quantity)\s*[:x]?\s*\d+\b/ig, '')
+            .replace(/\s*[x×]\s*\d+\s*$/i, '')
+            .replace(/\s*\(\s*\d+\s*(?:copy|copies|qty|quantity)\s*\)\s*$/i, '')
+            .trim())
+          .filter(Boolean)
+          .filter((book) => {
+            const key = book.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+            if (seen.has(key)) return false;
+            seen.add(key);
+            return true;
+          });
+      }
+
+      function currentLine() {
+        const beforeCursor = booksInput.value.slice(0, booksInput.selectionStart);
+        return beforeCursor.split('\n').pop().trim();
+      }
+
+      function closeSuggestions() {
+        suggestions.classList.remove('visible');
+        suggestions.innerHTML = '';
+        booksInput.setAttribute('aria-expanded', 'false');
+        suggestionItems = [];
+        activeSuggestion = -1;
+      }
+
+      function selectSuggestion(book) {
+        const cursor = booksInput.selectionStart;
+        const beforeCursor = booksInput.value.slice(0, cursor);
+        const lineStart = beforeCursor.lastIndexOf('\n') + 1;
+        const lineEndPosition = booksInput.value.indexOf('\n', cursor);
+        const lineEnd = lineEndPosition === -1 ? booksInput.value.length : lineEndPosition;
+        const value = book.authors?.length ? `${book.title} by ${book.authors.join(', ')}` : book.title;
+        booksInput.value = `${booksInput.value.slice(0, lineStart)}${value}${booksInput.value.slice(lineEnd)}`;
+        const newCursor = lineStart + value.length;
+        booksInput.setSelectionRange(newCursor, newCursor);
+        booksInput.focus();
+        closeSuggestions();
+      }
+
+      function renderSuggestions(books) {
+        suggestionItems = books;
+        activeSuggestion = -1;
+        suggestions.innerHTML = '';
+        books.forEach((book, index) => {
+          const button = document.createElement('button');
+          button.type = 'button';
+          button.className = 'suggestion';
+          button.setAttribute('role', 'option');
+          button.innerHTML = `<span class="suggestion-title">${escapeHtml(book.title)}</span>${book.authors?.length ? `<span class="suggestion-author">${escapeHtml(book.authors.join(', '))}</span>` : ''}`;
+          button.addEventListener('mousedown', (event) => {
+            event.preventDefault();
+            selectSuggestion(book);
+          });
+          suggestions.appendChild(button);
+        });
+        suggestions.classList.toggle('visible', books.length > 0);
+        booksInput.setAttribute('aria-expanded', books.length ? 'true' : 'false');
+      }
+
+      async function getBookSuggestions(query) {
+        const requestId = ++lookupSequence;
+        try {
+          const response = await fetch(`/api/suggest?q=${encodeURIComponent(query)}`);
+          if (!response.ok || requestId !== lookupSequence) return;
+          const payload = await response.json();
+          const books = payload.books || [];
+          renderSuggestions(books);
+        } catch {
+          if (requestId === lookupSequence) closeSuggestions();
+        }
+      }
+
+      booksInput.addEventListener('input', () => {
+        clearTimeout(suggestionTimer);
+        const query = currentLine();
+        if (query.length < 2 || /\bby\b/i.test(query)) {
+          closeSuggestions();
+          return;
+        }
+        suggestionTimer = setTimeout(() => getBookSuggestions(query), 300);
+      });
+
+      booksInput.addEventListener('keydown', (event) => {
+        if (!suggestionItems.length) return;
+        if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+          event.preventDefault();
+          activeSuggestion = event.key === 'ArrowDown'
+            ? (activeSuggestion + 1) % suggestionItems.length
+            : (activeSuggestion - 1 + suggestionItems.length) % suggestionItems.length;
+          [...suggestions.children].forEach((item, index) => item.classList.toggle('active', index === activeSuggestion));
+        } else if (event.key === 'Enter' && activeSuggestion >= 0) {
+          event.preventDefault();
+          selectSuggestion(suggestionItems[activeSuggestion]);
+        } else if (event.key === 'Escape') {
+          closeSuggestions();
+        }
+      });
+
+      booksInput.addEventListener('blur', () => setTimeout(closeSuggestions, 150));
+
+      async function compressImage(file) {
+        const bitmap = await createImageBitmap(file);
+        const scale = Math.min(1, 1600 / Math.max(bitmap.width, bitmap.height));
+        const canvas = document.createElement('canvas');
+        canvas.width = Math.round(bitmap.width * scale);
+        canvas.height = Math.round(bitmap.height * scale);
+        canvas.getContext('2d').drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+        return canvas.toDataURL('image/jpeg', 0.82).split(',')[1];
+      }
+
+      async function identifyBooksInImage(image) {
+        const imageData = await compressImage(image);
+        const response = await fetch('/api/extract-books', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ image_data: imageData, mime_type: 'image/jpeg' })
+        });
+        const payload = await response.json();
+        if (!response.ok) throw new Error(payload.message || 'Image analysis could not be completed.');
+        return payload.books;
+      }
+
+      function renderResults(items) {
+        const message = items.map((item) => {
+          const value = item.isbn_13 || item.message || 'ISBN not found';
+          return `${item.query} — ${value}`;
+        }).join('\n');
+        results.innerHTML = `<div class="message">${escapeHtml(message)}</div>`;
+      }
+
+      window.addEventListener('message', (event) => {
+        if (event.source !== window || event.data?.source !== 'ISBN_SCRAPER_EXTENSION') return;
+        if (event.data.type === 'ISBN_EXTENSION_READY') {
+          extensionAvailable = true;
+          if (!status.textContent) status.textContent = 'Amazon extension connected.';
+        }
+      });
+
+      let remainingExtensionChecks = 12;
+      const extensionProbe = setInterval(() => {
+        window.postMessage({ source: 'ISBN_SCRAPER_WEB', type: 'ISBN_EXTENSION_PING' }, window.location.origin);
+        remainingExtensionChecks -= 1;
+        if (extensionAvailable || remainingExtensionChecks === 0) clearInterval(extensionProbe);
+      }, 500);
+
+      function requestExtensionLookup(books) {
+        return new Promise((resolve, reject) => {
+          const requestId = crypto.randomUUID();
+          const timeout = setTimeout(() => {
+            window.removeEventListener('message', onResponse);
+            reject(new Error('The extension did not respond. Make sure it is installed, enabled, and then reload this page.'));
+          }, 180000);
+          function onResponse(event) {
+            if (event.source !== window || event.data?.source !== 'ISBN_SCRAPER_EXTENSION' || event.data.requestId !== requestId) return;
+            clearTimeout(timeout);
+            window.removeEventListener('message', onResponse);
+            if (event.data.type === 'ISBN_EXTENSION_RESULTS') resolve(event.data.results);
+            else reject(new Error(event.data.message || 'The extension could not complete the lookup.'));
+          }
+          window.addEventListener('message', onResponse);
+          window.postMessage({ source: 'ISBN_SCRAPER_WEB', type: 'ISBN_EXTENSION_LOOKUP', requestId, books }, window.location.origin);
+        });
+      }
+
+      imageUpload.addEventListener('change', async () => {
+        const image = imageUpload.files[0];
+        if (!image) return;
+        imageUpload.disabled = true;
+        submitButton.disabled = true;
+        results.innerHTML = '';
+        status.textContent = 'Identifying books and authors…';
+        try {
+          const identifiedBooks = await identifyBooksInImage(image);
+          const detectedTitles = prepareBooks(identifiedBooks.map((book) => book.author ? `${book.title} by ${book.author}` : book.title));
+          booksInput.value = detectedTitles.join('\n');
+          status.textContent = detectedTitles.length
+            ? 'Book titles and authors added. Review them, then select Find ISBNs.'
+            : 'No readable books were found. Try a clearer picture.';
+        } catch (visionError) {
+          if (!window.Tesseract) {
+            status.textContent = visionError.message || 'The picture could not be read.';
+          } else {
+            try {
+              status.textContent = 'Using basic text recognition…';
+              const { data } = await Tesseract.recognize(image, 'eng', {
+                logger: (message) => {
+                  if (message.status === 'recognizing text') {
+                    status.textContent = `Reading the picture… ${Math.round(message.progress * 100)}%`;
+                  }
+                }
+              });
+              const detectedTitles = prepareBooks(data.text
+                .split('\n')
+                .map((line) => line.replace(/^[-•*\d.)\s]+/, '').trim())
+                .filter((line) => line.length > 1));
+              booksInput.value = detectedTitles.join('\n');
+              status.textContent = detectedTitles.length
+                ? 'Text added. Review the titles, then select Find ISBNs.'
+                : 'No readable titles were found. Try a clearer picture.';
+            } catch (ocrError) {
+              status.textContent = ocrError.message || 'The picture could not be read. Try another image with clearer text.';
+            }
+          }
+        } finally {
+          imageUpload.disabled = false;
+          submitButton.disabled = false;
+          imageUpload.value = '';
+        }
+      });
+
+      listImageUpload.addEventListener('change', async () => {
+        const image = listImageUpload.files[0];
+        if (!image) return;
+        listImageUpload.disabled = true;
+        listResults.innerHTML = '';
+        listStatus.textContent = 'Identifying unique book titles and authors…';
+        try {
+          const books = await identifyBooksInImage(image);
+          const lines = books.map((book) => book.author ? `${book.title} — ${book.author}` : book.title);
+          listResults.innerHTML = `<div class="message">${escapeHtml(lines.join('\n') || 'No books were identified.')}</div>`;
+          listStatus.textContent = lines.length ? `${lines.length} unique book${lines.length === 1 ? '' : 's'} identified.` : 'No readable books were found.';
+        } catch (error) {
+          listStatus.textContent = error.message || 'The image could not be analyzed.';
+        } finally {
+          listImageUpload.disabled = false;
+          listImageUpload.value = '';
+        }
+      });
+
+      form.addEventListener('submit', async (event) => {
+        event.preventDefault();
+        const books = prepareBooks(booksInput.value.split('\n'));
+        if (!books.length) return;
+        submitButton.disabled = true;
+        status.textContent = 'Looking up ISBNs in your browser…';
+        results.innerHTML = '';
+        try {
+          if (!extensionAvailable) throw new Error('Install and enable the Amazon India ISBN Finder extension, then reload this page.');
+          const lookupResults = await requestExtensionLookup(books);
+          status.textContent = 'Lookup complete.';
+          renderResults(lookupResults);
+        } catch (error) {
+          status.textContent = error.message || 'The lookup could not be completed.';
+        } finally {
+          submitButton.disabled = false;
+        }
+      });
+    </script>
+  </body>
+</html>
